@@ -5,3 +5,1750 @@ day02：创建分支，添加新功能123
 day03：my分支上线
 day03：my分支上线，添加功能1
 day03：my分支上线，添加功能2
+#include "stdafx.h"
+#include <WinSpool.h>
+#include <winsvc.h>
+#include "util.h"
+#include "common.h"
+#include <Setupapi.h>
+#pragma comment(lib,"Setupapi.lib")
+
+extern INT lanID;
+extern CVar cVar;
+extern CInstallSer cInstallSer;
+
+//初始化
+BOOL CVar::init(VOID)
+{
+	bExit = FALSE; 
+
+	if (isOs64())
+	{
+		osBits = 64;
+		StrCpyW(envir, _T("Windows x64"));
+		GetSystemDirectory(sys32Path, MAX_PATH);
+		StrCatW(sys32Path, _T("\\"));
+		StrCpyW(sys64Path, sys32Path);
+		*StrStr(sys64Path, _T("system32")) = '\0';
+		StrCatW(sys64Path, _T("SysWOW64\\"));
+	}
+	else
+	{
+		osBits = 32;
+		StrCpyW(envir, _T("Windows NT x86"));
+		GetSystemDirectory(sys32Path, MAX_PATH);
+		StrCatW(sys32Path, _T("\\"));
+	}
+
+	GetModuleFileName(NULL, modulePath, sizeof(modulePath)); //获取当前路径
+	(_tcsrchr(modulePath, _T('\\')))[0] = 0;
+
+	ULONG cpuInfo[4] = {0};
+
+	__cpuidex((int*)cpuInfo, 1,0);
+
+	cpuID = cpuInfo[0];
+	
+	return TRUE;
+}
+
+//初始化
+BOOL CInstallSer::init(VOID)
+{
+	WCHAR tempSerFiles[SER_FILES_NUM][MAX_ADAPTER_NAME] = { SER_INI, SER_BOX, SER_EXE };
+
+	for (INT i = 0; i < SER_FILES_NUM; i++) StrCpyW(serFiles[i], tempSerFiles[i]);
+
+	if (SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, installPath) != S_OK) //“我的文档”
+	{
+		GetSystemDirectory(installPath, MAX_PATH); //系统盘路径
+		*StrStr(installPath, _T("\\")) = '\0';
+	}
+
+	StrCatW(installPath, _T("\\"));
+	StrCatW(installPath, INSTALL_DIR);
+
+	bCover = TRUE;
+	if (StrCmpW(installPath, cVar.modulePath) == 0) bCover = FALSE;
+
+	return TRUE;
+}
+
+//退出打印服务
+BOOL CInstallSer::exitSer(VOID)
+{
+	DWORD len = 0;
+	HANDLE hPipe = INVALID_HANDLE_VALUE;
+	LPCTSTR lpszPipeName = PIPE_NAME;
+	HANDLE delayEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!WaitNamedPipe(lpszPipeName, 3000))
+		return FALSE;
+
+	hPipe = CreateFile(
+		lpszPipeName,
+		GENERIC_READ | GENERIC_WRITE,
+		0,
+		NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL
+		);
+
+	if (hPipe == INVALID_HANDLE_VALUE)	return FALSE;
+
+	if (!WriteFile(hPipe, "exit", 50, &len, 0))
+	{
+		CloseHandle(hPipe);
+		return FALSE;
+	}
+
+	WaitForSingleObject(delayEvent, 5000);
+
+	CloseHandle(hPipe);
+
+	return TRUE;
+}
+
+//清除打印服务文件夹下的所有文件
+BOOL CInstallSer::cleanSerFiles(VOID)
+{
+	WCHAR dirPath[MAX_PATH];
+
+	if (!bCover) return TRUE;
+
+	StrCpyW(dirPath, installPath);
+	StrCatW(dirPath, _T("\\driver"));
+	deleteDir(dirPath);
+
+	StrCpyW(dirPath, installPath);
+	StrCatW(dirPath, _T("\\service"));
+	deleteDir(dirPath);
+
+	StrCpyW(dirPath, installPath);
+	StrCatW(dirPath, _T("\\tools"));
+	deleteDir(dirPath);
+
+	StrCpyW(dirPath, installPath);
+	deleteDir(dirPath);
+
+	delay(1000);
+
+	return TRUE;
+}
+
+//拷贝打印服务相关文件夹及文件
+BOOL CInstallSer::copySerFiles(VOID)
+{
+	WCHAR srcDir[MAX_PATH],destDir[MAX_PATH];
+
+	if (!bCover) return TRUE;
+
+	if (StrStr(INSTALL_DIR, _T("\\")))
+	{
+		//创建父文件夹
+		StrCpyW(destDir, installPath);
+		(_tcsrchr(destDir, _T('\\')))[0] = 0;
+		CreateDirectory(destDir, NULL);
+		
+		//创建文件夹
+		StrCpyW(destDir, installPath);
+		CreateDirectory(destDir, NULL);
+	}
+	else
+	{
+		//创建文件夹
+		StrCpyW(destDir, installPath);
+		CreateDirectory(destDir, NULL);
+	}
+
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\driver"));
+	CreateDirectory(destDir, NULL);
+	
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\service"));
+	CreateDirectory(destDir, NULL);
+
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\tools"));
+	CreateDirectory(destDir, NULL);
+
+	//拷贝文件夹
+	StrCpyW(srcDir, cVar.modulePath);
+	StrCatW(srcDir, _T("\\driver"));
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\driver"));
+	copyDir(srcDir,destDir);
+
+	StrCpyW(srcDir, cVar.modulePath);
+	StrCatW(srcDir, _T("\\service"));
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\service"));
+	copyDir(srcDir, destDir);
+
+	StrCpyW(srcDir, cVar.modulePath);
+	StrCatW(srcDir, _T("\\tools"));
+	StrCpyW(destDir, installPath);
+	StrCatW(destDir, _T("\\tools"));
+	copyDir(srcDir, destDir);
+
+	StrCpyW(srcDir, cVar.modulePath);
+	StrCpyW(destDir, installPath);
+	copyDir(srcDir, destDir);
+
+	delay(1000);
+
+	return TRUE;
+}
+
+//注册自启动
+BOOL CInstallSer::autoRun(VOID)
+{
+	LPCTSTR lpSubKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+	HKEY hKey;
+	REGSAM flag = KEY_SET_VALUE;
+	DWORD dwDisposition = REG_OPENED_EXISTING_KEY;
+	LONG lRet = 0;
+	WCHAR autoPath[MAX_PATH];
+
+	StrCpyW(autoPath, _T("\""));
+	StrCatW(autoPath, installPath);
+	StrCatW(autoPath, _T("\\service\\"));
+	StrCatW(autoPath, SER_EXE);
+	StrCatW(autoPath, _T("\""));
+
+	if (cVar.osBits == 64)	flag |= KEY_WOW64_64KEY;
+
+	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", NULL, flag, &hKey) != ERROR_SUCCESS)
+	{
+		return FALSE;
+	}
+	else
+	{
+		if (RegSetValueEx(hKey, AUTO_RUN_KEY, NULL, REG_SZ, (LPBYTE)autoPath, (wcslen(autoPath) + 1)*sizeof(WCHAR)) != ERROR_SUCCESS) //设置注册表项 
+		{
+			RegCloseKey(hKey);
+			if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", NULL, KEY_ALL_ACCESS, &hKey) != ERROR_SUCCESS)
+			{
+				return FALSE;
+			}
+			else
+			{
+				RegSetValueEx(hKey, AUTO_RUN_KEY, NULL, REG_SZ, (LPBYTE)autoPath, (wcslen(autoPath) + 1)*sizeof(WCHAR));
+				RegCloseKey(hKey);
+			}
+		}
+		else
+		{
+			RegCloseKey(hKey);
+		}
+	}
+
+	return TRUE;
+}
+
+BOOL CInstallSer::start(VOID)
+{
+	WCHAR serPath[MAX_PATH];
+	SHELLEXECUTEINFO   ShExecInfo = { 0 };
+
+	StrCpyW(serPath, installPath);
+	StrCatW(serPath, _T("\\service"));
+
+	ShExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
+	ShExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
+	ShExecInfo.hwnd = NULL;
+	ShExecInfo.lpVerb = NULL;
+	ShExecInfo.lpFile = SER_EXE;
+	ShExecInfo.lpParameters = NULL;
+	ShExecInfo.lpDirectory = serPath;
+	ShExecInfo.nShow = SW_SHOW;//SW_HIDE;   
+	ShExecInfo.hInstApp = NULL;
+
+	ShellExecuteEx(&ShExecInfo);
+
+	return TRUE;
+}
+
+//安装服务
+BOOL CInstallSer::install(VOID)
+{
+	init(); //获取安装路径
+	exitSer();  //进程间通信，给server/box发送exit消息
+	cleanSerFiles(); //删除安装目录的文件
+	copySerFiles(); //拷贝文件到安装目录
+	autoRun(); //写入注册表，server.exe开机自动启动
+	start();// 启动server.exe
+	return TRUE;
+}
+
+//初始化
+BOOL CInstallDrv::init(VOID)
+{
+	WCHAR tempDrvFixFiles[FIX_FILES_NUM][MAX_ADAPTER_NAME] = { _T("srclient.dll"), _T("stddtype.gdl"), _T("stdschem.gdl"), _T("stdschmx.gdl"), _T("unidrv.dll"), _T("UNIDRV.HLP"), _T("UNIDRVUI.DLL"), _T("UNIRES.DLL") };
+
+	for (INT i = 0; i < FIX_FILES_NUM; i++) StrCpyW(drvFixFiles[i], tempDrvFixFiles[i]); //驱动固定文件
+
+	pOldDevEntry = NULL; 
+	
+	//获取当前系统版本
+	OSVERSIONINFOEX osVer;
+	DWORDLONG conMask = 0;
+	UINT major[6] = { 6, 6, 6, 5, 5, 5 };
+	UINT min[6] = { 0, 1, 2, 0, 1, 2 };
+
+	for (INT i = 0; i < 6; i++)
+	{
+		ZeroMemory(&osVer, sizeof(osVer));
+		osVer.dwOSVersionInfoSize = sizeof(osVer);
+		osVer.dwMajorVersion = major[i];
+		osVer.dwMinorVersion = min[i];
+		VER_SET_CONDITION(conMask, VER_MAJORVERSION, VER_EQUAL);
+		VER_SET_CONDITION(conMask, VER_MINORVERSION, VER_EQUAL);
+		if (VerifyVersionInfo(&osVer, VER_MAJORVERSION | VER_MINORVERSION, conMask)) break;
+	}
+
+	WCHAR drvDir[MAX_PATH] = {0};
+	switch (osVer.dwMajorVersion)
+	{
+		case 6:
+			switch (osVer.dwMinorVersion)
+			{
+				case 0: //Vista 2008
+					StrCpyW(drvDir,_T("\\driver\\2008"));
+					break;
+				case 1: //Win7
+					StrCpyW(drvDir, _T("\\driver\\win7"));
+					break;
+				case 2: //Win8 Win10
+					StrCpyW(drvDir, _T("\\driver\\win8"));
+					break;
+				default: //Win7
+					StrCpyW(drvDir, _T("\\driver\\win7"));
+					break;
+			}
+			break;
+		case 5:
+			switch (osVer.dwMinorVersion)
+			{
+				case 1: //XP 32bit
+					StrCpyW(drvDir, _T("\\driver\\xp"));
+					break;
+				case 2: //2003 xp 64bit
+					StrCpyW(drvDir, _T("\\driver\\2003"));
+					break;
+				default: //2000
+					StrCpyW(drvDir, _T("\\driver\\xp"));
+					break;
+			}
+			break;
+		default: //win8
+			StrCpyW(drvDir, _T("\\driver\\win8"));
+			break;
+	}
+
+	StrCpyW(drvPath, cVar.modulePath);
+	StrCatW(drvPath, drvDir);
+	if (cVar.osBits == 64)
+	{
+		StrCatW(drvPath, _T("\\x64\\"));
+	}
+	else
+	{
+		StrCatW(drvPath, _T("\\x86\\"));
+	}
+
+	if (SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, iniPath) != S_OK) //“我的文档”
+	{
+		GetSystemDirectory(iniPath, MAX_PATH); //系统盘路径
+		*StrStr(iniPath, _T("\\")) = _T('\0');
+	}
+
+	//将安装路径保存到注册表中
+	HKEY hKey;
+	REGSAM flag = KEY_SET_VALUE;
+	if (cVar.osBits == 64) flag |= KEY_WOW64_64KEY;
+	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Print\\Printers", 0, flag, &hKey) == ERROR_SUCCESS)
+	{
+		RegSetValueEx(hKey, INSTALL_DIR, 0, REG_SZ, (LPBYTE)&(iniPath), (DWORD)(wcslen(iniPath) + 1)*sizeof(WCHAR));
+		RegCloseKey(hKey);
+	}
+
+	StrCatW(iniPath, _T("\\"));
+	StrCatW(iniPath, INSTALL_DIR);
+	StrCatW(iniPath, _T("\\config.ini"));
+
+	WritePrivateProfileString(_T("install"), _T("status"), _T("busy"), iniPath);
+	if (cVar.osBits == 64)
+	{
+		WritePrivateProfileString(_T("install"), _T("os64"), _T("yes"), iniPath);
+	}
+	else
+	{
+		WritePrivateProfileString(_T("install"), _T("os64"), _T("no"), iniPath);
+	}
+
+	return TRUE;
+}
+
+//打印服务是否已停止
+BOOL CInstallDrv::isSpoolStopped(VOID)
+{
+
+	SC_HANDLE hSc = ::OpenSCManager(NULL, NULL, GENERIC_EXECUTE);
+	if (hSc == NULL) return TRUE;
+
+	SC_HANDLE hSvc = ::OpenService(hSc, _T("Spooler"), SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP);
+	if (hSvc == NULL)
+	{
+		::CloseServiceHandle(hSc);
+		return TRUE;
+	}
+
+	SERVICE_STATUS status;
+	if (::QueryServiceStatus(hSvc, &status) == FALSE)
+	{
+		::CloseServiceHandle(hSvc);
+		::CloseServiceHandle(hSc);
+		return TRUE;
+	}
+
+	if (status.dwCurrentState == SERVICE_RUNNING)
+	{
+		::CloseServiceHandle(hSvc);
+		::CloseServiceHandle(hSc);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+//启动打印服务
+BOOL CInstallDrv::startSpool(VOID)
+{
+	SC_HANDLE hSc = ::OpenSCManager(NULL, NULL, GENERIC_EXECUTE);
+	if (hSc == NULL) return FALSE;
+	SC_HANDLE hSvc = ::OpenService(hSc, _T("Spooler"), SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP);
+	if (hSvc == NULL)
+	{
+		::CloseServiceHandle(hSc);
+		return FALSE;
+	}
+	SERVICE_STATUS status;
+	if (::QueryServiceStatus(hSvc, &status) == FALSE)
+	{
+		::CloseServiceHandle(hSvc);
+		::CloseServiceHandle(hSc);
+		return FALSE;
+	}
+	if (status.dwCurrentState == SERVICE_STOPPED)
+	{
+		if (::StartService(hSvc, NULL, NULL) == FALSE)
+		{
+			::CloseServiceHandle(hSvc);
+			::CloseServiceHandle(hSc);
+			return FALSE;
+		}
+
+		HANDLE delayEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+		while (::QueryServiceStatus(hSvc, &status) == TRUE)
+		{
+			WaitForSingleObject(delayEvent, status.dwWaitHint);
+			if (status.dwCurrentState == SERVICE_RUNNING)
+			{
+				::CloseServiceHandle(hSvc);
+				::CloseServiceHandle(hSc);
+				return TRUE;
+			}
+		}
+
+	}
+	::CloseServiceHandle(hSvc);
+	::CloseServiceHandle(hSc);
+	return TRUE;
+}
+
+//停止打印服务
+BOOL CInstallDrv::stopSpool(VOID)
+{
+	SC_HANDLE hSc = ::OpenSCManager(NULL, NULL, GENERIC_EXECUTE);
+	if (hSc == NULL) return FALSE;
+	SC_HANDLE hSvc = ::OpenService(hSc, _T("Spooler"), SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP);
+	if (hSvc == NULL)
+	{
+		::CloseServiceHandle(hSc);
+		return FALSE;
+	}
+	SERVICE_STATUS status;
+	if (::QueryServiceStatus(hSvc, &status) == FALSE)
+	{
+		::CloseServiceHandle(hSvc);
+		::CloseServiceHandle(hSc);
+		return FALSE;
+	}
+	if (status.dwCurrentState == SERVICE_RUNNING)
+	{
+		if (::ControlService(hSvc, SERVICE_CONTROL_STOP, &status) == FALSE)
+		{
+			::CloseServiceHandle(hSvc);
+			::CloseServiceHandle(hSc);
+			return FALSE;
+		}
+		HANDLE delayEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+		while (::QueryServiceStatus(hSvc, &status) == TRUE)
+		{
+			WaitForSingleObject(delayEvent, status.dwWaitHint);
+			if (status.dwCurrentState == SERVICE_STOPPED)
+			{
+				::CloseServiceHandle(hSvc);
+				::CloseServiceHandle(hSc);
+				return TRUE;
+			}
+		}
+	}
+	::CloseServiceHandle(hSvc);
+	::CloseServiceHandle(hSc);
+	return TRUE;
+}
+
+//是否存在残留文件
+BOOL CInstallDrv::isOldFiles(VOID)
+{
+	DWORD ret = 0;
+	WCHAR oldFile[MAX_PATH],sysPath[MAX_PATH],tempFile[MAX_PATH];
+
+	StrCpyW(sysPath, cVar.sys32Path);
+	if (cVar.osBits == 64) 	StrCpyW(sysPath, cVar.sys64Path);
+
+#ifdef DPI_203_300
+
+	StrCpyW(oldFile, sysPath);
+	StrCatW(oldFile, MONITOR_DLL_XY);
+	if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempFile, MONITOR_DLL_XY_FORMAT, i);
+		StrCpyW(oldFile, sysPath);
+		StrCatW(oldFile, tempFile);
+		if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+	}
+
+#endif
+
+#ifdef DPI_203_203
+
+	StrCpyW(oldFile, sysPath);
+	StrCatW(oldFile, MONITOR_DLL_XX);
+	if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempFile, MONITOR_DLL_XX_FORMAT, i);
+		StrCpyW(oldFile, sysPath);
+		StrCatW(oldFile, tempFile);
+		if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+	}
+
+#endif
+
+#ifdef DPI_300_300
+
+	StrCpyW(oldFile, sysPath);
+	StrCatW(oldFile, MONITOR_DLL_YY);
+	if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempFile, MONITOR_DLL_YY_FORMAT, i);
+		StrCpyW(oldFile, sysPath);
+		StrCatW(oldFile, tempFile);
+		if (GetFileAttributes(oldFile) != INVALID_FILE_ATTRIBUTES) return TRUE;
+	}
+
+#endif
+
+	return FALSE;
+}
+
+//获取打印机列表
+BOOL CInstallDrv::getOldPrinters(VOID)
+{
+	BOOL bFind = FALSE;
+	HKEY hKey = NULL;
+	WCHAR printer[MAX_ADAPTER_NAME] = {0};
+	DWORD i = 0,index = 0,len = 256, size = 0, type = 0;
+	PWCHAR key = _T("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Print\\Printers");
+
+	pOldDev pDev = pOldDevEntry;
+	pOldDev pNode = pOldDevEntry;
+
+	while (pDev)
+	{
+		pNode = pDev;
+		pDev = pDev->next;
+		free(pNode);
+	}
+
+	pOldDevEntry = NULL;
+
+	if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+	{
+		while (RegEnumKeyEx(hKey, i, printer, &len, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+		{
+			HKEY hSubKey = NULL;
+			WCHAR subKey[MAX_PATH];
+			StrCpyW(subKey, key);
+			StrCatW(subKey, _T("\\"));
+			StrCatW(subKey, printer);
+
+			if (ERROR_SUCCESS == ::RegOpenKeyEx(HKEY_LOCAL_MACHINE, subKey, 0, KEY_READ, &hSubKey))
+			{
+				size = sizeof(DWORD);
+				type = REG_DWORD;
+
+				if (::RegQueryValueEx(hSubKey, REG_KEY_INDEX, 0, &type, (LPBYTE)&index, &size) == ERROR_SUCCESS)
+				{
+					if (StrStr(printer, _T(",")) != NULL)
+					{
+						SHDeleteKey(HKEY_LOCAL_MACHINE,subKey);
+					}
+					else
+					{
+						bFind = TRUE;
+
+						if (pOldDevEntry == NULL)
+						{
+							pDev = (pOldDev)malloc(sizeof(oldDev));
+							pDev->next = NULL;
+							pOldDevEntry = pDev;
+						}
+						else
+						{
+							pDev = pOldDevEntry;
+							while (pDev)
+							{
+								pNode = pDev;
+								pDev = pDev->next;
+							}
+							pNode->next = (pOldDev)malloc(sizeof(oldDev));
+							pNode = pNode->next;
+							pNode->next = NULL;
+							pDev = pNode;
+						}
+
+						StrCpyW(pDev->printer, printer);
+
+						ZeroMemory(pDev->driver, sizeof(pDev->driver));
+						size = sizeof(pDev->driver);
+						type = REG_SZ;
+						::RegQueryValueEx(hSubKey, _T("Printer Driver"), 0, &type, (LPBYTE)&pDev->driver, &size);
+
+						ZeroMemory(pDev->port, sizeof(pDev->port));
+						size = sizeof(pDev->port);
+						type = REG_SZ;
+						::RegQueryValueEx(hSubKey, _T("Port"), 0, &type, (LPBYTE)&pDev->port, &size);
+
+						ZeroMemory(pDev->monitor, sizeof(pDev->monitor));
+						size = sizeof(pDev->monitor);
+						type = REG_SZ;
+						::RegQueryValueEx(hSubKey, REG_KEY_MONITOR, 0, &type, (LPBYTE)&pDev->monitor, &size);
+					}
+				}
+
+				::RegCloseKey(hSubKey);
+			}
+
+			i++;
+			len = 256;
+		}
+	}
+
+	if (hKey) RegCloseKey(hKey);
+
+	return bFind;
+}
+
+//删除老版本打印机
+BOOL CInstallDrv::cleanOldPrinters(VOID)
+{
+	HANDLE hPrinter;
+	PRINTER_DEFAULTS def = { NULL, NULL, PRINTER_ALL_ACCESS};
+	pOldDev pDev = pOldDevEntry;
+	WCHAR driver[MAX_PATH],port[MAX_PATH],monitor[MAX_PATH];
+
+	while (pDev)
+	{
+		if (OpenPrinter(pDev->printer, &hPrinter, &def))
+		{
+			DeletePrinter(hPrinter);
+			ClosePrinter(hPrinter);
+		}
+
+		DeletePrinterDriver(NULL, cVar.envir, pDev->driver);
+		DeletePort(NULL, NULL, pDev->port);
+		DeleteMonitor(NULL, cVar.envir, pDev->monitor);
+
+		pDev = pDev->next;
+	}
+
+#ifdef DPI_203_300
+	wsprintf(driver, DRIVER_NAME_XY_FORMAT, cVar.cpuID);
+	DeletePrinterDriver(NULL, cVar.envir, driver);
+	DeletePort(NULL, NULL, PORT_NAME_XY);
+	DeleteMonitor(NULL, cVar.envir, MONITOR_NAME_XY);
+#endif
+
+#ifdef DPI_203_203
+	wsprintf(driver, DRIVER_NAME_XX_FORMAT, cVar.cpuID);
+	DeletePrinterDriver(NULL, cVar.envir, driver);
+	DeletePort(NULL, NULL, PORT_NAME_XX);
+	DeleteMonitor(NULL, cVar.envir, MONITOR_NAME_XX);
+#endif
+
+#ifdef DPI_300_300
+	wsprintf(driver, DRIVER_NAME_YY_FORMAT, cVar.cpuID);
+	DeletePrinterDriver(NULL, cVar.envir, driver);
+	DeletePort(NULL, NULL, PORT_NAME_YY);
+	DeleteMonitor(NULL, cVar.envir, MONITOR_NAME_YY);
+#endif
+
+#ifdef PRJ_TYPE_PT
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(driver, _T("wewin TB %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB monitor %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin TB XX %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB XX %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB monitor XX %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin TB YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin TB_V2 %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB_V2 %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB_V2 monitor %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin TB_V2 XX %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB_V2 XX %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB_V2 monitor XX %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin TB_V2 YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwTB_V2 YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin TB_V2 monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);		
+	}
+#endif
+
+#ifdef PRJ_TYPE_DS50
+	for(INT i = 0; i< 20; i++)
+	{
+		wsprintf(driver, _T("wewin WD_V2 XX %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD_V2 XX %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD_V2 monitor XX %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin WD_V2 YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD_V2 YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD_V2 monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin WD XY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD XY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD monitor XY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin WD 90 XY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD 90 XY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD monitor 90 XY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin WD XX %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD XX %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD monitor XX %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin WD YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwWD YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin WD monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+	}
+#endif
+
+#ifdef PRJ_TYPE_P51
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(driver, _T("wewin P51 %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwP51 %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin P51 monitor %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+	}
+#endif
+
+#ifdef PRJ_TYPE_DS51
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(driver, _T("wewin DS51 %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwDS51 %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin DS51 monitor %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("MakeID WB51 %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("MakeID %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("MakeID WB51 monitor %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("wewin DS51 YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("wwDS51 YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("wewin DS51 monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+
+		wsprintf(driver, _T("MakeID WB51 YY %d"), i);
+		DeletePrinterDriver(NULL, cVar.envir, driver);
+		wsprintf(port, _T("MakeID YY %d"), i);
+		DeletePort(NULL, NULL, port);
+		wsprintf(monitor, _T("MakeID WB51 monitor YY %d"), i);
+		DeleteMonitor(NULL, cVar.envir, monitor);
+	}
+#endif
+
+	delay(3000);
+
+	return TRUE;
+}
+
+//清理监控文件
+BOOL CInstallDrv::restartSpool(VOID)
+{
+	WCHAR delFile[MAX_PATH], tempFile[MAX_PATH], sysPath[MAX_PATH];
+
+	stopSpool();
+
+	StrCpyW(sysPath, cVar.sys32Path);
+	if (cVar.osBits == 64) StrCpyW(sysPath, cVar.sys64Path);
+
+	switch (lanID)
+	{
+		case 936:
+			SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("正在卸载旧版驱动..."));
+			break;
+		default:
+			SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("Start to uninstall the old driver..."));
+			break;
+	}
+
+	delay(10000);
+
+	while (isOldFiles())
+	{
+		delay(5000);
+
+#ifdef DPI_203_300
+		StrCpyW(delFile, sysPath);
+		StrCatW(delFile, MONITOR_DLL_XY);
+		DeleteFile(delFile);
+		for (INT i = 0; i < 20; i++)
+		{
+			wsprintf(tempFile, MONITOR_DLL_XY_FORMAT, i);
+			StrCpyW(delFile, sysPath);
+			StrCatW(delFile, tempFile);
+			DeleteFile(delFile);
+		}
+#endif
+
+#ifdef DPI_203_203
+		StrCpyW(delFile, sysPath);
+		StrCatW(delFile, MONITOR_DLL_XX);
+		DeleteFile(delFile);
+		for (INT i = 0; i < 20; i++)
+		{
+			wsprintf(tempFile, MONITOR_DLL_XX_FORMAT, i);
+			StrCpyW(delFile, sysPath);
+			StrCatW(delFile, tempFile);
+			DeleteFile(delFile);
+		}
+#endif
+
+#ifdef DPI_300_300
+		StrCpyW(delFile, sysPath);
+		StrCatW(delFile, MONITOR_DLL_YY);
+		DeleteFile(delFile);
+		for (INT i = 0; i < 20; i++)
+		{
+			wsprintf(tempFile, MONITOR_DLL_YY_FORMAT, i);
+			StrCpyW(delFile, sysPath);
+			StrCatW(delFile, tempFile);
+			DeleteFile(delFile);
+		}
+#endif
+	}
+
+	delay(100);
+
+	if (!startSpool())
+	{
+		EndDialog(AfxGetApp()->m_pMainWnd->m_hWnd, 0);
+		switch (lanID)
+		{
+			case 936:
+				MessageBox(NULL, _T("启动打印服务失败，请检查打印服务是否被禁用!\r\n如果被禁用，请以自动运行方式开启，再进行安装!"), _T("错误报告"), MB_OK);
+				break;
+			default:
+				MessageBox(NULL, _T("The 'Print Spooler' failed to start.\r\n Please open it manually if it has been forbidden."), _T("ERROR"), MB_OK);
+				break;
+		}
+		resFree();
+		exit(0);
+	}
+
+	switch (lanID)
+	{
+		case 936:
+			SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("开始安装驱动，我们将很快完成..."));
+			break;
+		default:
+			SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("Begin to install the driver,we will complete as soon as possible."));
+			break;
+	}
+
+	delay(100);
+
+	return TRUE;
+}
+
+//释放资源
+BOOL CInstallDrv::resFree(VOID)
+{
+	pOldDev pDev = pOldDevEntry;
+	pOldDev pNode = pOldDevEntry;
+
+	while (pDev)
+	{
+		pNode = pDev;
+		pDev = pDev->next;
+		free(pNode);
+	}
+
+	WritePrivateProfileString(_T("install"), _T("status"), _T("free"), iniPath);
+
+	return TRUE;
+}
+
+
+//拷贝到系统目录
+BOOL CInstallDrv::copyToSys32(INT type)
+{
+	WCHAR srcFile[MAX_PATH], destFile[MAX_PATH];
+
+	//导入系统文件
+	for (INT i = 0; i < FIX_FILES_NUM; i++)
+	{
+		StrCpyW(srcFile, drvPath);
+		StrCatW(srcFile, drvFixFiles[i]);
+		StrCpyW(destFile, cVar.sys32Path);
+		StrCatW(destFile, drvFixFiles[i]);
+		CopyFile(srcFile, destFile, FALSE);
+	}
+
+	//导入bmpFile
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, bmpFile);
+	StrCpyW(destFile,cVar.sys32Path);
+	StrCatW(destFile, bmpFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, dataFile);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, dataFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入monitorFile
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, monitorFile);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, monitorFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入monitorFile副本
+	WCHAR tempFile[MAX_PATH];
+
+	switch(type)
+	{
+		case 1: //XY
+			#ifdef MONITOR_DLL_XY_FORMAT
+				for (INT i = 0; i < 20; i++)
+				{
+					StrCpyW(srcFile, drvPath);
+					StrCatW(srcFile, monitorFile);
+					StrCpyW(destFile, cVar.sys32Path);
+					wsprintf(tempFile, MONITOR_DLL_XY_FORMAT, i);
+					StrCatW(destFile, tempFile);
+					CopyFile(srcFile, destFile, FALSE);
+					delay(10);
+				}
+			#endif
+			break;
+		case 2: //XX
+			#ifdef MONITOR_DLL_XX_FORMAT
+				for (INT i = 0; i < 20; i++)
+				{
+					StrCpyW(srcFile, drvPath);
+					StrCatW(srcFile, monitorFile);
+					StrCpyW(destFile, cVar.sys32Path);
+					wsprintf(tempFile, MONITOR_DLL_XX_FORMAT, i);
+					StrCatW(destFile, tempFile);
+					CopyFile(srcFile, destFile, FALSE);
+					delay(10);
+				}
+			#endif
+			break;
+		case 3: //YY
+			#ifdef MONITOR_DLL_YY_FORMAT
+				for (INT i = 0; i < 20; i++)
+				{
+					StrCpyW(srcFile, drvPath);
+					StrCatW(srcFile, monitorFile);
+					StrCpyW(destFile, cVar.sys32Path);
+					wsprintf(tempFile, MONITOR_DLL_YY_FORMAT, i);
+					StrCatW(destFile, tempFile);
+					CopyFile(srcFile, destFile, FALSE);
+					delay(10);
+				}
+			#endif
+			break;
+		default:
+			break;
+	}
+	
+	//导入uiFile
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, uiFile);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, uiFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.dll
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameDll);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, stdNameDll);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameGPD);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, stdNameGPD);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入ini
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, iniFile);
+	StrCpyW(destFile, cVar.sys32Path);
+	StrCatW(destFile, iniFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	return TRUE;
+}
+
+//拷贝到spool
+BOOL CInstallDrv::copyToSpool(VOID)
+{
+	DWORD cbNeed = 0;
+	WCHAR spoolPath[MAX_PATH];
+	WCHAR srcFile[MAX_PATH], destFile[MAX_PATH];
+
+	if (!GetPrinterDriverDirectory(NULL, (LPWSTR)cVar.envir, 1, (LPBYTE)spoolPath, MAX_PATH, &cbNeed)) return FALSE;
+
+	StrCatW(spoolPath, _T("\\"));
+
+	//导入系统文件
+	for (INT i = 0; i < FIX_FILES_NUM; i++)
+	{
+		StrCpyW(srcFile, drvPath);
+		StrCatW(srcFile, drvFixFiles[i]);
+		StrCpyW(destFile, spoolPath);
+		StrCatW(destFile, drvFixFiles[i]);
+		CopyFile(srcFile, destFile, FALSE);
+	}
+
+	//导入bmpFile
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, bmpFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, bmpFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入bmp.gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, dataFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, dataFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.dll
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameDll);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, stdNameDll);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameGPD);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, stdNameGPD);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入ini
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, iniFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, iniFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	return TRUE;
+}
+
+//拷贝到spool3
+BOOL CInstallDrv::copyToSpool3(VOID)
+{
+	DWORD cbNeed = 0;
+	WCHAR spoolPath[MAX_PATH];
+	WCHAR srcFile[MAX_PATH], destFile[MAX_PATH];
+
+	if (!GetPrinterDriverDirectory(NULL, (LPWSTR)cVar.envir, 1, (LPBYTE)spoolPath, MAX_PATH, &cbNeed)) return FALSE;
+
+	StrCatW(spoolPath, _T("\\3\\"));
+
+	//导入系统文件
+	for (INT i = 0; i < FIX_FILES_NUM; i++)
+	{
+		StrCpyW(srcFile, drvPath);
+		StrCatW(srcFile, drvFixFiles[i]);
+		StrCpyW(destFile, spoolPath);
+		StrCatW(destFile, drvFixFiles[i]);
+		CopyFile(srcFile, destFile, FALSE);
+	}
+
+	//导入bmpFile
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, bmpFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, bmpFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入bmp.gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, dataFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, dataFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.dll
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameDll);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, stdNameDll);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入stdNames.gpd
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, stdNameGPD);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, stdNameGPD);
+	CopyFile(srcFile, destFile, FALSE);
+
+	//导入ini
+	StrCpyW(srcFile, drvPath);
+	StrCatW(srcFile, iniFile);
+	StrCpyW(destFile, spoolPath);
+	StrCatW(destFile, iniFile);
+	CopyFile(srcFile, destFile, FALSE);
+
+	return TRUE;
+}
+
+//拷贝所有的文件到系统目录下
+BOOL CInstallDrv::copyToSys(INT type)
+{
+	copyToSys32(type);
+	copyToSpool();
+	copyToSpool3();
+	return TRUE;
+}
+
+//清除掉SPOOL下的残留文件
+BOOL CInstallDrv::cleanSpool(VOID)
+{
+	DWORD cbNeed = 0;
+	WCHAR spoolPath[MAX_PATH],delFile[MAX_PATH];
+
+	if (!GetPrinterDriverDirectory(NULL, (LPWSTR)cVar.envir, 1, (LPBYTE)spoolPath, MAX_PATH, &cbNeed)) return FALSE;
+	StrCatW(spoolPath, _T("\\"));
+
+	//删除临时文件：系统文件
+	for (INT i = 0; i < FIX_FILES_NUM; i++)
+	{
+		StrCpyW(delFile, spoolPath);
+		StrCatW(delFile, drvFixFiles[i]);
+		DeleteFile(delFile);
+	}
+	
+	//删除bmp.dll
+	StrCpyW(delFile, spoolPath);
+	StrCatW(delFile, bmpFile);
+	DeleteFile(delFile);
+
+	//删除bmp.ini
+	StrCpyW(delFile, spoolPath);
+	StrCatW(delFile, iniFile);
+	DeleteFile(delFile);
+
+	//删除bmp.gpd
+	StrCpyW(delFile, spoolPath);
+	StrCatW(delFile, dataFile);
+	DeleteFile(delFile);
+
+	//删除stdNames.dll
+	StrCpyW(delFile, spoolPath);
+	StrCatW(delFile, stdNameDll);
+	DeleteFile(delFile);
+
+	//删除stdNames.gpd
+	StrCpyW(delFile, spoolPath);
+	StrCatW(delFile, stdNameGPD);
+	DeleteFile(delFile);
+	
+	return TRUE;
+}
+
+//添加端口
+BOOL CInstallDrv::addPort(VOID)
+{
+	HANDLE hXcv = INVALID_HANDLE_VALUE;
+	PRINTER_DEFAULTS def = { NULL, NULL, SERVER_ACCESS_ADMINISTER };
+	BYTE byOutputData[256] = { 0 };
+	DWORD cbOutputNeeded = 0;
+	DWORD dwStatus = 0;
+	WCHAR XcvMonitorName[MAX_ADAPTER_NAME];
+
+	wsprintf(XcvMonitorName, _T(",XcvMonitor %s"), monitor);
+
+	if (!OpenPrinter(XcvMonitorName, &hXcv, &def))
+	{
+		DWORD err = GetLastError();
+		return FALSE;
+	}
+
+	DeletePort(NULL, NULL, port);
+
+	if (!XcvData(hXcv, _T("AddPort"), (PBYTE)port, (wcslen(port) + 1) * 2, (PBYTE)byOutputData, sizeof(byOutputData), &cbOutputNeeded, &dwStatus))
+	{
+		DWORD dwErr = GetLastError();
+		ClosePrinter(hXcv);
+		return FALSE;
+	}
+	ClosePrinter(hXcv);
+
+	return TRUE;
+}
+
+//添加XY类型驱动
+BOOL CInstallDrv::addDriver(VOID)
+{
+	INT len = 0;
+	WCHAR sysPath[MAX_PATH];
+	WCHAR spoolPath[MAX_PATH];
+	DWORD cbNeed = 0;
+	DRIVER_INFO_3 di3;
+	WCHAR uniDrvPath[MAX_PATH];
+	WCHAR dataPath[MAX_PATH];
+	WCHAR configPath[MAX_PATH];
+	WCHAR hlpPath[MAX_PATH];
+	WCHAR dependPath[MAX_PATH];
+
+	if (!GetPrinterDriverDirectory(NULL, (LPWSTR)cVar.envir, 1, (LPBYTE)sysPath, MAX_PATH, &cbNeed)) return FALSE;
+
+	StrCpyW(spoolPath, sysPath);
+	StrCatW(sysPath, _T("\\"));
+
+	StrCpyW(uniDrvPath, sysPath);
+	StrCatW(uniDrvPath, uniDrvFile);
+
+	StrCpyW(dataPath, sysPath);
+	StrCatW(dataPath, dataFile);
+
+	StrCpyW(configPath, sysPath);
+	StrCatW(configPath, configFile);
+
+	StrCpyW(hlpPath, sysPath);
+	StrCatW(hlpPath, hlpFile);
+
+	ZeroMemory(&di3, sizeof(DRIVER_INFO_3));
+	di3.cVersion = 0x03;
+	di3.pName = (LPWSTR)driver;
+	di3.pEnvironment = (LPWSTR)cVar.envir;
+	di3.pDriverPath = (LPWSTR)uniDrvPath;
+	di3.pDataFile = (LPWSTR)dataPath;
+	di3.pConfigFile = (LPWSTR)configPath;
+	di3.pHelpFile = (LPWSTR)hlpPath;
+
+	memset(dependPath, 0x00, sizeof(dependPath));
+	StrCpyW(dependPath, iniFile);
+	len += wcslen(iniFile) + 1;
+	StrCatW(&dependPath[len], bmpFile);
+	len += wcslen(bmpFile) + 1;
+	StrCatW(&dependPath[len], uniresFile);
+	len += wcslen(uniresFile) + 1;
+	StrCatW(&dependPath[len], stdNameGPD);
+	len += wcslen(stdNameGPD) + 1;
+	StrCatW(&dependPath[len], stdNameDll);
+	len += wcslen(stdNameDll) + 1;
+	StrCatW(&dependPath[len], _T("stddtype.gdl"));
+	len += wcslen(_T("stddtype.gdl")) + 1;
+	StrCatW(&dependPath[len], _T("stdschem.gdl"));
+	len += wcslen(_T("stdschem.gdl")) + 1;
+	StrCatW(&dependPath[len], _T("stdschmx.gdl"));
+	len += wcslen(_T("stdschmx.gdl")) + 1;
+	di3.pDependentFiles = dependPath;
+
+	di3.pMonitorName = monitor;
+	di3.pDefaultDataType = TEXT("RAW");
+
+	DWORD errCode;
+	if (!AddPrinterDriver(NULL, 3, (LPBYTE)&di3))
+	{
+		errCode = GetLastError();
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+//安装打印监控
+BOOL CInstallDrv::addMonitor(VOID)
+{
+	MONITOR_INFO_2 mi2;
+	WCHAR monitorPath[MAX_PATH];
+	WCHAR debugMsg[1024] = { 0 };
+
+	if (cVar.osBits == 32) StrCpyW(monitorPath, cVar.sys32Path);
+	if (cVar.osBits == 64) StrCpyW(monitorPath, cVar.sys64Path);
+
+	StrCatW(monitorPath, monitorFile);
+
+	ZeroMemory(&mi2, sizeof(MONITOR_INFO_2));
+
+	DeleteMonitor(NULL,cVar.envir,monitor);
+
+	mi2.pDLLName = monitorPath;
+	mi2.pName = monitor;
+	mi2.pEnvironment = cVar.envir;
+	memset(debugMsg, 0, 1024);
+	swprintf_s(debugMsg, sizeof(debugMsg) / sizeof(WCHAR), L"install.exe monitorPath:%s", monitorPath);
+	OutputDebugString(debugMsg);
+
+	memset(debugMsg, 0, 1024);
+	swprintf_s(debugMsg, sizeof(debugMsg) / sizeof(WCHAR), L"install.exe monitor:%s", monitor);
+	OutputDebugString(debugMsg);
+
+	memset(debugMsg, 0, 1024);
+	swprintf_s(debugMsg, sizeof(debugMsg) / sizeof(WCHAR), L"install.exe pEnvironment:%s", cVar.envir);
+	OutputDebugString(debugMsg);
+
+
+	if (!AddMonitor(NULL, 2, (LPBYTE)&mi2))
+	{
+		DWORD dwErr = GetLastError();
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+//安装XY类型的打印机驱动
+BOOL CInstallDrv::installXY(VOID)
+{
+#ifdef DPI_203_300
+	OutputDebugString(L"installXY in");
+	if(lanID == 936)
+	{
+		StrCpyW(dataFile, BMP_GPD_XY);	
+	}
+	else
+	{
+		StrCpyW(dataFile, BMP_GPD_XY_EN);	
+	}
+
+	StrCpyW(bmpFile, BMP_DLL_XY);
+	StrCpyW(stdNameGPD, STDNAMES_GPD);
+	StrCpyW(monitorFile, MONITOR_DLL_XY);
+	StrCpyW(uiFile, UI_DLL_XY);
+	StrCpyW(stdNameDll, STDNAMES_DLL);
+	StrCpyW(iniFile, BMP_INI_XY);
+	StrCpyW(uniDrvFile, _T("unidrv.dll"));
+	StrCpyW(configFile, _T("UNIDRVUI.DLL"));
+	StrCpyW(hlpFile, _T("UNIDRV.HLP"));
+	StrCpyW(uniresFile, _T("UNIRES.DLL"));
+
+	wsprintf(driver, DRIVER_NAME_XY_FORMAT, cVar.cpuID);
+
+	StrCpyW(port, PORT_NAME_XY);
+	StrCpyW(monitor, MONITOR_NAME_XY);
+
+	DeletePrinterDriver(NULL, NULL, driver);
+	DeletePort(NULL, NULL, PORT_NAME_XY);
+	DeleteMonitor(NULL, NULL, MONITOR_NAME_XY);
+
+	WCHAR tempName[MAX_ADAPTER_NAME];
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempName, PORT_NAME_XY_FORMAT, i);
+		DeletePort(NULL, NULL, tempName);
+		wsprintf(tempName, MONITOR_NAME_XY_FORMAT, i);
+		DeleteMonitor(NULL, NULL, tempName);
+	}
+
+	devType = 1; //XY
+	copyToSys(devType);
+
+	delay(1000);
+	if (!addMonitor()) return FALSE;
+
+	delay(1000);
+	if (!addDriver()) return FALSE;
+	OutputDebugString(L"installXY out");
+#endif
+	return TRUE;
+}
+
+//安装XX类型的打印机驱动
+BOOL CInstallDrv::installXX(VOID)
+{
+#ifdef DPI_203_203
+	OutputDebugString(L"installXX in");
+	if (lanID == 936)
+	{
+		StrCpyW(dataFile, BMP_GPD_XX);
+	}
+	else
+	{
+		StrCpyW(dataFile, BMP_GPD_XX_EN);
+	}
+
+	StrCpyW(bmpFile, BMP_DLL_XX);
+	StrCpyW(monitorFile, MONITOR_DLL_XX);
+	StrCpyW(uiFile, UI_DLL_XX);
+	StrCpyW(stdNameDll, STDNAMES_DLL);
+	StrCpyW(stdNameGPD, STDNAMES_GPD);
+	StrCpyW(iniFile, BMP_INI_XX);
+	StrCpyW(uniDrvFile, _T("unidrv.dll"));
+	StrCpyW(configFile, _T("UNIDRVUI.DLL"));
+	StrCpyW(hlpFile, _T("UNIDRV.HLP"));
+	StrCpyW(uniresFile, _T("UNIRES.DLL"));
+
+	wsprintf(driver, DRIVER_NAME_XX_FORMAT, cVar.cpuID);
+
+	StrCpyW(port, PORT_NAME_XX);
+	StrCpyW(monitor, MONITOR_NAME_XX);
+
+	DeletePrinterDriver(NULL, NULL, driver);
+	DeletePort(NULL, NULL, PORT_NAME_XX);
+	DeleteMonitor(NULL, NULL, MONITOR_NAME_XX);
+
+	WCHAR tempName[MAX_ADAPTER_NAME];
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempName, PORT_NAME_XX_FORMAT, i);
+		DeletePort(NULL, NULL, tempName);
+		wsprintf(tempName, MONITOR_NAME_XX_FORMAT, i);
+		DeleteMonitor(NULL, NULL, tempName);
+	}
+
+	devType = 2; //XX
+	copyToSys(devType);
+
+	delay(1000);
+	OutputDebugString(L"installXX addMonitor");
+	if (!addMonitor()) return FALSE;
+
+	delay(1000);
+	OutputDebugString(L"installXX addDriver");
+	if (!addDriver()) return FALSE;
+	OutputDebugString(L"installXX OUT");
+#endif
+	return TRUE;
+}
+
+//安装XX类型的打印机驱动
+BOOL CInstallDrv::installYY(VOID)
+{
+#ifdef DPI_300_300
+	OutputDebugString(L"installYY in");
+	if (lanID == 936)
+	{
+		StrCpyW(dataFile, BMP_GPD_YY);
+	}
+	else
+	{
+		StrCpyW(dataFile, BMP_GPD_YY_EN);
+	}
+
+	StrCpyW(bmpFile, BMP_DLL_YY);
+	StrCpyW(monitorFile, MONITOR_DLL_YY);
+	StrCpyW(uiFile, UI_DLL_YY);
+	StrCpyW(stdNameDll, STDNAMES_DLL);
+	StrCpyW(stdNameGPD, STDNAMES_GPD);
+	StrCpyW(iniFile, BMP_INI_YY);
+	StrCpyW(uniDrvFile, _T("unidrv.dll"));
+	StrCpyW(configFile, _T("UNIDRVUI.DLL"));
+	StrCpyW(hlpFile, _T("UNIDRV.HLP"));
+	StrCpyW(uniresFile, _T("UNIRES.DLL"));
+
+	wsprintf(driver, DRIVER_NAME_YY_FORMAT, cVar.cpuID);
+
+	StrCpyW(port, PORT_NAME_YY);
+	StrCpyW(monitor, MONITOR_NAME_YY);
+
+	DeletePrinterDriver(NULL, NULL, driver);
+	DeletePort(NULL, NULL, PORT_NAME_YY);
+	DeleteMonitor(NULL, NULL, MONITOR_NAME_YY);
+
+	WCHAR tempName[MAX_ADAPTER_NAME];
+	for (INT i = 0; i < 20; i++)
+	{
+		wsprintf(tempName, PORT_NAME_YY_FORMAT, i);
+		DeletePort(NULL, NULL, tempName);
+		wsprintf(tempName, MONITOR_NAME_YY_FORMAT, i);
+		DeleteMonitor(NULL, NULL, tempName);
+	}
+
+	devType = 3; //YY
+	copyToSys(devType);
+
+	delay(1000);
+	if (!addMonitor()) return FALSE;
+
+	delay(1000);
+	if (!addDriver()) return FALSE;
+	OutputDebugString(L"installYY OUT");
+#endif
+	return TRUE;
+}
+
+//安装打印监控
+BOOL CInstallDrv::isMonitorFree(VOID)
+{
+	WCHAR configFile[MAX_PATH],status[MAX_PATH];
+
+	StrCpyW(configFile, cInstallSer.installPath);
+	StrCatW(configFile, CONFIG_FILE);
+
+	delay(3000);
+
+	GetPrivateProfileStringW(L"monitor", L"status", L"busy", status, sizeof(status) / sizeof(WCHAR), configFile);
+
+	if (StrCmpW(status, _T("free")) == 0) return TRUE;
+
+	return FALSE;
+}
+
+
+//设备是否在线
+BOOL CInstallDrv::isDevOnline(VOID)
+{
+	INT devNo = 0;
+	BOOL bOnline = FALSE;
+	WCHAR devPath[MAX_PATH];
+	GUID usbGuid = {0xA5DCBF10,0x6530,0x11D2,0x90,0x1F,0x00,0xC0,0x4F,0xB9,0x51,0xED};
+	HDEVINFO hDevInfo = SetupDiGetClassDevs(&usbGuid, NULL, NULL, (DIGCF_PRESENT | DIGCF_DEVICEINTERFACE));
+
+	if (hDevInfo == INVALID_HANDLE_VALUE) return FALSE;
+	SP_DEVICE_INTERFACE_DATA devInfoData;
+
+	devInfoData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+	SetLastError(NO_ERROR);
+
+
+	while (GetLastError() != ERROR_NO_MORE_ITEMS)
+	{
+		if (SetupDiEnumInterfaceDevice(hDevInfo, 0, &usbGuid, devNo, &devInfoData))
+		{
+			ULONG requireLength = 0;
+			SetupDiGetInterfaceDeviceDetail(hDevInfo, &devInfoData, NULL, 0, &requireLength, NULL);
+			PSP_INTERFACE_DEVICE_DETAIL_DATA devDetail = (SP_INTERFACE_DEVICE_DETAIL_DATA*)malloc(requireLength);
+			devDetail->cbSize = sizeof(SP_INTERFACE_DEVICE_DETAIL_DATA);
+			if (!SetupDiGetInterfaceDeviceDetail(hDevInfo, &devInfoData, devDetail, requireLength, NULL, NULL))
+			{
+				free(devDetail);
+				SetupDiDestroyDeviceInfoList(hDevInfo);
+				break;
+			}
+
+			wcscpy_s(devPath, sizeof(devPath) / sizeof(WCHAR), devDetail->DevicePath);
+			_wcslwr_s(devPath, wcslen(devPath) + 1);
+
+			if (wcsstr(devPath, USB_ID) != NULL)
+			{
+				free(devDetail);
+				bOnline = TRUE;
+				break;
+			}
+			free(devDetail);
+		}
+		devNo++;
+	}
+	SetupDiDestroyDeviceInfoList(hDevInfo);
+
+	return bOnline;
+}
+
+//安装打印机驱动
+BOOL CInstallDrv::install(VOID)
+{
+	INT cnt = 0;
+	BOOL bSuccess = TRUE;
+
+	init();
+
+	if (isSpoolStopped())
+	{
+		startSpool();
+		delay(10000);
+	}
+
+	if (getOldPrinters() || isOldFiles())
+	{
+		AfxGetApp()->m_pMainWnd->ShowWindow(SW_HIDE);
+		delay(100);
+
+		WCHAR msg[MAX_PATH] = _T("系统已存在驱动，是否覆盖安装？");
+		WCHAR title[MAX_PATH] = _T("驱动安装");
+
+		if (lanID != 936)
+		{
+			StrCpyW(msg, _T("Do you want to replace the driver installed ?"));
+			StrCpyW(title, _T("Driver Install"));
+		}
+
+		if (MessageBox(NULL, msg, title, MB_YESNO) != IDYES)
+		{
+			resFree();
+			exit(0);
+		}
+
+		cleanOldPrinters(); //必须强制卸载所有的老版本的驱动
+		AfxGetApp()->m_pMainWnd->ShowWindow(SW_SHOW);
+		AfxGetApp()->m_pMainWnd->SetForegroundWindow();
+		delay(100);
+		restartSpool();
+	}
+	else
+	{
+		cleanOldPrinters(); //必须强制卸载所有的老版本的驱动
+	}
+
+     while (!installXY()|| !installXX() || !installYY())
+	{
+		cnt++;
+		if (cnt > 4) { bSuccess = FALSE; break; }
+	}
+
+	resFree();
+
+	if (bSuccess)
+	{
+		cnt = 0;
+		while (!isMonitorFree()){ cnt++; if (cnt > 2) break;}
+		if (isDevOnline())
+		{
+			switch (lanID)
+			{
+				case 936:
+					SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("安装成功，感谢信任和支持！"));
+					break;
+				default:
+					SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("Successfully. Thanks for your support."));
+					break;
+			}
+		}
+		else
+		{
+			switch (lanID)
+			{
+				case 936:
+					SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("安装成功，请连接打印机，系统会自动加载驱动"));
+					break;
+				default:
+					SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("Successfully. Please connect the printer to the computer.\r\nAnd the driver will be loaded by the OS automatically."));
+					break;
+			}
+		}
+	}
+	else
+	{
+		switch (lanID)
+		{
+			case 936:
+				SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("安装失败！请重启计算机后，再安装！"));
+				break;
+			default:
+				SetDlgItemText(AfxGetApp()->m_pMainWnd->m_hWnd, IDC_STATIC, _T("Fail. Some error occurs."));
+				break;
+		}
+	}
+
+	delay(3000);
+
+	EndDialog(AfxGetApp()->m_pMainWnd->m_hWnd, 0);
+
+	delay(100);
+
+	exit(0);
+
+	return TRUE;
+}
